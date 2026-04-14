@@ -70,15 +70,12 @@ function getChargeTargetSoc(windows, slot, monthIndex, fallbackPercent) {
   return target === null ? fallbackPercent : target;
 }
 
-function buildForceTargetCandidates(stepPercent, minTargetPercent = 0) {
+function buildForceTargetCandidates(stepPercent) {
   const step = Math.max(1, Math.min(50, Math.round(safeNum(stepPercent, 10))));
-  const minTarget = clampPercent(minTargetPercent, 0);
   const values = [];
   for (let p = 0; p <= 100; p += step) {
-    if (p < minTarget) continue;
     values.push(p);
   }
-  if (!values.length || values[0] > minTarget) values.unshift(minTarget);
   if (values[values.length - 1] !== 100) values.push(100);
   return values;
 }
@@ -403,15 +400,15 @@ function optimizeForceChargeTargetForDay({
   exportLimitKwh,
   minuteWeightsBySlot,
   stepPercent,
-  minTargetPercent,
 }) {
-  const candidates = buildForceTargetCandidates(stepPercent, minTargetPercent);
+  const candidates = buildForceTargetCandidates(stepPercent);
   let bestTarget = null;
   let bestScore = Number.NEGATIVE_INFINITY;
 
   for (const targetPercent of candidates) {
     let socKwh = socStartKwh;
     let dayCashflow = 0;
+    let forcedExportKwh = 0;
 
     for (const idx of dayIndexes) {
       const date = slots[idx];
@@ -449,15 +446,17 @@ function optimizeForceChargeTargetForDay({
       });
 
       socKwh = dispatch.socKwh;
+      forcedExportKwh += safeNum(dispatch.dischargeToExport, 0);
       const importCostWithVat = dispatch.gridImportKwh * importRate * vatFactor;
       const exportRevenueAfterTax = dispatch.gridExportKwh * exportRate * exportTaxFactor;
       dayCashflow += (exportRevenueAfterTax - importCostWithVat);
     }
 
-    if (dayCashflow > bestScore + 1e-9) {
-      bestScore = dayCashflow;
+    const score = (forcedExportKwh * 1_000_000) + dayCashflow;
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
       bestTarget = targetPercent;
-    } else if (Math.abs(dayCashflow - bestScore) <= 1e-9 && bestTarget !== null && targetPercent < bestTarget) {
+    } else if (Math.abs(score - bestScore) <= 1e-9 && bestTarget !== null && targetPercent > bestTarget) {
       bestTarget = targetPercent;
     }
   }
@@ -602,8 +601,21 @@ function runDispatchForSlot({
     }
 
     let stepGridImport = Math.max(0, demand) + stepGridForBatteryCharge;
-    const stepRawExport = Math.max(0, pvRemaining) + stepDischargeToExport;
     const stepExportLimit = exportLimitKwh * (stepHours / SLOT_HOURS);
+
+    // Battery cannot discharge-to-export beyond remaining export headroom after PV export.
+    if (stepDischargeToExport > 0 && stepExportLimit >= 0) {
+      const pvExportCandidate = Math.max(0, pvRemaining);
+      const exportHeadroomForBattery = Math.max(0, stepExportLimit - pvExportCandidate);
+      if (stepDischargeToExport > exportHeadroomForBattery) {
+        const reduced = stepDischargeToExport - exportHeadroomForBattery;
+        stepDischargeToExport = exportHeadroomForBattery;
+        // Undo SOC drop for discharge that could not be exported.
+        socKwh += reduced / Math.max(dischargeEff, 1e-9);
+      }
+    }
+
+    const stepRawExport = Math.max(0, pvRemaining) + stepDischargeToExport;
     let stepGridExport = Math.min(stepRawExport, stepExportLimit);
 
     // Physical meter flow is net at any instant: cannot import and export simultaneously.
@@ -772,15 +784,6 @@ export async function simulateProject(project, tariffIds = null, selectedDay = n
           }
           const dayIndexes = [];
           for (let idx = i; idx < dayEnd; idx += 1) dayIndexes.push(idx);
-          let minTargetPercent = 0;
-          for (const idx of dayIndexes) {
-            const daySlot = getSlotIndex(slots[idx]);
-            const dayMonth = slots[idx].getUTCMonth();
-            const forceChargeKwAtSlot = sumWindowPowerKw(forceChargeWindows, daySlot);
-            if (forceChargeKwAtSlot > 0) {
-              minTargetPercent = Math.max(minTargetPercent, getChargeTargetSoc(forceChargeWindows, daySlot, dayMonth, 0));
-            }
-          }
           activeAutoForceTargetPercent = optimizeForceChargeTargetForDay({
             dayIndexes,
             socStartKwh: socKwh,
@@ -808,7 +811,6 @@ export async function simulateProject(project, tariffIds = null, selectedDay = n
             exportLimitKwh,
             minuteWeightsBySlot,
             stepPercent: autoOptimizeForceChargeStepPercent,
-            minTargetPercent,
           });
         }
         dayAgg = {
