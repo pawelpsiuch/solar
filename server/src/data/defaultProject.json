@@ -1,0 +1,110 @@
+{
+  "name": "My PV Model",
+  "location": {
+    "latitude": 51.5072,
+    "longitude": -0.1276,
+    "country": "GB"
+  },
+  "arrays": [
+    {
+      "id": "array-1",
+      "name": "South Roof",
+      "peakPowerKw": 4,
+      "tiltDeg": 35,
+      "azimuthDeg": 180,
+      "lossPercent": 14,
+      "shadingPercent": 0,
+      "shadingStartSlot": 30,
+      "enabled": true
+    }
+  ],
+  "systems": [
+    {
+      "id": "system-1",
+      "name": "System 1",
+      "arrayIds": ["array-1"],
+      "inverter": {
+        "acPowerKw": 5,
+        "efficiencyPercent": 97
+      },
+      "batteryCoupling": "ac",
+      "battery": {
+        "enabled": true,
+        "capacityKwh": 10,
+        "usableCapacityPercent": 95,
+        "initialSocPercent": 50,
+        "minSocPercent": 15,
+        "targetSocPercent": 70,
+        "maxChargeKw": 5,
+        "maxDischargeKw": 5,
+        "chargeEfficiencyPercent": 95,
+        "dischargeEfficiencyPercent": 95,
+        "degradationCostPerKwh": 0.01
+      }
+    }
+  ],
+  "batteryControl": {
+    "autoOptimizeForceCharge": false,
+    "autoOptimizeForceChargeStepPercent": 10,
+    "forceChargeWindows": [
+      {
+        "name": "Overnight",
+        "startSlot": 2,
+        "endSlot": 9,
+        "powerKw": 3,
+        "targetSocPercent": 80,
+        "targetSocPercentByMonth": [80,80,80,80,80,80,80,80,80,80,80,80],
+        "enabled": false
+      }
+    ],
+    "forceDischargeWindows": [
+      {
+        "name": "Peak Export",
+        "startSlot": 34,
+        "endSlot": 40,
+        "powerKw": 3,
+        "targetSocPercent": 15,
+        "enabled": false
+      }
+    ]
+  },
+  "exportLimitKw": 3.68,
+  "consumption": {
+    "baseDayKwh": 12,
+    "slotKwh": [
+      0.3,0.25,0.2,0.2,0.2,0.2,0.2,0.25,0.3,0.3,0.28,0.28,
+      0.3,0.3,0.35,0.35,0.35,0.3,0.25,0.25,0.25,0.25,0.3,0.35,
+      0.4,0.45,0.5,0.55,0.6,0.55,0.4,0.35,0.3,0.28,0.27,0.27,
+      0.28,0.3,0.35,0.4,0.45,0.5,0.45,0.4,0.35,0.35,0.33,0.32
+    ],
+    "monthlyAdjustment": [1.12,1.08,1.02,0.95,0.9,0.88,0.9,0.92,0.96,1.01,1.08,1.12]
+  },
+  "evs": [],
+  "tariffs": [
+    {
+      "id": "tariff-flat",
+      "name": "Flat",
+      "standingChargePerDay": 0.55,
+      "importRate": [
+        0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,
+        0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,
+        0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,
+        0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27,0.27
+      ],
+      "exportRate": [
+        0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,
+        0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,
+        0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,
+        0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15,0.15
+      ],
+      "enabled": true
+    }
+  ],
+  "economics": {
+    "annualMaintenanceCost": 100,
+    "importVatPercent": 5,
+    "exportTaxPercent": 0,
+    "discountRatePercent": 0,
+    "co2KgPerKwhGrid": 0.18
+  }
+}

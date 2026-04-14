@@ -1,0 +1,17 @@
+{
+  "name": "solar-typical-year-model",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm:dev -w server\" \"npm:dev -w client\"",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
