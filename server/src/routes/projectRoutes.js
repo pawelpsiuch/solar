@@ -5,6 +5,7 @@ import { importHomeAssistantTypicalDay } from "../services/homeAssistant.js";
 import {
   detectOctopusAccountTariffCodes,
   importOctopusTariff,
+  importOctopusTariffsForYear,
   importOctopusUsageProfile,
   listOctopusAccountTariffOptions,
 } from "../services/octopus.js";
@@ -50,6 +51,20 @@ projectRouter.post("/import-octopus-tariff", async (req, res) => {
       apiKey: payload.apiKey || process.env.OCTOPUS_API_KEY,
     });
     res.json(tariff);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+projectRouter.post("/import-octopus-year-tariffs", async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const data = await importOctopusTariffsForYear({
+      ...payload,
+      accountNumber: payload.accountNumber || process.env.OCTOPUS_ACCOUNT_NUMBER,
+      apiKey: payload.apiKey || process.env.OCTOPUS_API_KEY,
+    });
+    res.json(data);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

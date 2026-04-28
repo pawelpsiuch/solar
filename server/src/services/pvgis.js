@@ -23,9 +23,16 @@ function normalizeAspectDeg(input) {
   return normalized;
 }
 
-function makeKey(location, array) {
+function normalizePVGISYear(input) {
+  const raw = Number(input ?? 2020);
+  if (!Number.isFinite(raw)) return 2020;
+  return Math.max(2005, Math.floor(raw));
+}
+
+function makeKey(location, array, sourceYear) {
   return [
-    "v2",
+    "v3",
+    normalizePVGISYear(sourceYear),
     location.latitude,
     location.longitude,
     array.tiltDeg,
@@ -47,8 +54,9 @@ function normalizeShadingStartSlot(input) {
   return Math.max(0, Math.min(SLOTS_PER_DAY - 1, Math.floor(raw)));
 }
 
-async function fetchArrayHourlyProfile(location, array) {
+async function fetchArrayHourlyProfile(location, array, sourceYear) {
   const aspectDeg = normalizeAspectDeg(array.azimuthDeg);
+  const year = normalizePVGISYear(sourceYear);
   const params = new URLSearchParams({
     lat: String(location.latitude),
     lon: String(location.longitude),
@@ -59,8 +67,8 @@ async function fetchArrayHourlyProfile(location, array) {
     angle: String(array.tiltDeg ?? 35),
     aspect: String(aspectDeg),
     mountingplace: "building",
-    startyear: "2020",
-    endyear: "2020",
+    startyear: String(year),
+    endyear: String(year),
     optimalangles: "0",
     components: "1",
   });
@@ -107,14 +115,15 @@ function readProfilePoint(profileRow) {
 export async function getPVGenerationSlots(project) {
   const cache = await loadPVGISCache();
   const arrays = (project.arrays || []).filter((arr) => arr.enabled !== false);
+  const sourceYear = normalizePVGISYear(project?.pvgis?.sourceYear);
   const halfHourlyTotal = Array(8760 * 2).fill(0);
 
   for (const array of arrays) {
-    const key = makeKey(project.location, array);
+    const key = makeKey(project.location, array, sourceYear);
     let profile = cache[key];
 
     if (!profile) {
-      profile = await fetchArrayHourlyProfile(project.location, array);
+      profile = await fetchArrayHourlyProfile(project.location, array, sourceYear);
       cache[key] = profile;
     }
 
@@ -149,16 +158,17 @@ export async function getPVGenerationSlots(project) {
 export async function getPVGenerationSlotsByArray(project) {
   const cache = await loadPVGISCache();
   const arrays = (project.arrays || []).filter((arr) => arr.enabled !== false);
+  const sourceYear = normalizePVGISYear(project?.pvgis?.sourceYear);
   const byArrayId = {};
   const sunshineSlots = Array(8760 * 2).fill(0);
   const sunshineCountSlots = Array(8760 * 2).fill(0);
 
   for (const array of arrays) {
-    const key = makeKey(project.location, array);
+    const key = makeKey(project.location, array, sourceYear);
     let profile = cache[key];
 
     if (!profile) {
-      profile = await fetchArrayHourlyProfile(project.location, array);
+      profile = await fetchArrayHourlyProfile(project.location, array, sourceYear);
       cache[key] = profile;
     }
 

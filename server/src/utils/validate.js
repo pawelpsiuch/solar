@@ -15,6 +15,13 @@ export function validateProject(project) {
     throw new Error("Location latitude/longitude are required numbers");
   }
 
+  if (project.pvgis?.sourceYear !== undefined) {
+    const y = Number(project.pvgis.sourceYear);
+    if (!Number.isFinite(y) || Math.floor(y) !== y || y < 2005) {
+      throw new Error("pvgis.sourceYear must be an integer year >= 2005");
+    }
+  }
+
   if (!Array.isArray(project.arrays) || !project.arrays.length) {
     throw new Error("At least one array is required");
   }

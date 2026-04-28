@@ -37,6 +37,17 @@ export async function importOctopusTariff(payload) {
   return data;
 }
 
+export async function importOctopusYearTariffs(payload) {
+  const res = await fetch("/api/import-octopus-year-tariffs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Octopus yearly tariff import failed");
+  return data;
+}
+
 export async function detectOctopusAccountTariffs(payload) {
   const res = await fetch("/api/octopus/account-tariffs", {
     method: "POST",

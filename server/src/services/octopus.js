@@ -22,6 +22,12 @@ function toIso(input, fallback) {
   return d.toISOString();
 }
 
+function normalizeYear(input, fallback = new Date().getUTCFullYear()) {
+  const y = Number(input ?? fallback);
+  if (!Number.isFinite(y)) return fallback;
+  return Math.max(2000, Math.floor(y));
+}
+
 function endOfHalfHour(date) {
   const d = new Date(date.getTime());
   d.setUTCSeconds(0, 0);
@@ -455,5 +461,90 @@ export async function importOctopusTariff(config) {
       exportTariffCode,
       includeVat,
     },
+  };
+}
+
+export async function importOctopusTariffsForYear(config) {
+  const includeVat = config?.includeVat !== false;
+  const sourceYear = normalizeYear(config?.year, new Date().getUTCFullYear());
+  const periodFrom = new Date(Date.UTC(sourceYear, 0, 1, 0, 0, 0, 0)).toISOString();
+  const periodTo = new Date(Date.UTC(sourceYear + 1, 0, 1, 0, 0, 0, 0)).toISOString();
+
+  let importTariffCode = config?.importTariffCode || null;
+  let exportTariffCode = config?.exportTariffCode || null;
+
+  if (!importTariffCode && config?.accountNumber && config?.apiKey) {
+    const detected = await detectOctopusAccountTariffCodes({
+      accountNumber: config.accountNumber,
+      apiKey: config.apiKey,
+      asOf: new Date(Date.UTC(sourceYear, 11, 31, 12, 0, 0, 0)).toISOString(),
+    });
+    importTariffCode = detected.importTariffCode;
+    exportTariffCode = exportTariffCode || detected.exportTariffCode;
+  }
+
+  if (!importTariffCode && !exportTariffCode) {
+    throw new Error("Provide at least one tariff code (importTariffCode or exportTariffCode).");
+  }
+
+  const tariffs = [];
+  const namePrefix = String(config?.namePrefix || `Octopus ${sourceYear}`).trim();
+  const stamp = Date.now();
+
+  if (importTariffCode) {
+    const importRows = await fetchTariffRates(importTariffCode, periodFrom, periodTo, "standard-unit-rates");
+    const importRate = buildSlotProfileFromRates(importRows, periodFrom, periodTo, includeVat);
+    const standingRows = await fetchTariffRates(importTariffCode, periodFrom, periodTo, "standing-charges");
+    const standingChargePerDay = averageStandingCharge(standingRows, includeVat);
+
+    tariffs.push({
+      id: `octopus-${stamp}-imp`,
+      name: `${namePrefix} Import`,
+      standingChargePerDay,
+      importRate,
+      exportRate: Array(48).fill(0),
+      enabled: true,
+      meta: {
+        source: "octopus",
+        importedAt: new Date().toISOString(),
+        mode: "split-import-only",
+        sourceYear,
+        periodFrom,
+        periodTo,
+        importTariffCode,
+        includeVat,
+      },
+    });
+  }
+
+  if (exportTariffCode) {
+    const exportRows = await fetchTariffRates(exportTariffCode, periodFrom, periodTo, "standard-unit-rates");
+    const exportRate = buildSlotProfileFromRates(exportRows, periodFrom, periodTo, includeVat);
+
+    tariffs.push({
+      id: `octopus-${stamp}-exp`,
+      name: `${namePrefix} Export`,
+      standingChargePerDay: 0,
+      importRate: Array(48).fill(0),
+      exportRate,
+      enabled: true,
+      meta: {
+        source: "octopus",
+        importedAt: new Date().toISOString(),
+        mode: "split-export-only",
+        sourceYear,
+        periodFrom,
+        periodTo,
+        exportTariffCode,
+        includeVat,
+      },
+    });
+  }
+
+  return {
+    sourceYear,
+    periodFrom,
+    periodTo,
+    tariffs,
   };
 }

@@ -5,6 +5,9 @@
     "longitude": -0.1276,
     "country": "GB"
   },
+  "pvgis": {
+    "sourceYear": 2020
+  },
   "arrays": [
     {
       "id": "array-1",

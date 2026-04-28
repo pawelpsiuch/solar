@@ -5,6 +5,7 @@ import {
   Legend,
   Line,
   Area,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -16,6 +17,7 @@ import {
   fetchProject,
   importHomeAssistantCsv,
   importOctopusTariff,
+  importOctopusYearTariffs,
   runSimulation,
   saveProject,
 } from "./lib/api";
@@ -193,6 +195,9 @@ function normalizeProject(p) {
   return {
     ...p,
     systems,
+    pvgis: {
+      sourceYear: Number(p?.pvgis?.sourceYear ?? 2020),
+    },
     batteryControl: {
       ...defaultBatteryControl(),
       ...(p?.batteryControl || {}),
@@ -205,19 +210,7 @@ function normalizeProject(p) {
   };
 }
 
-function getMinuteWeightsForSlot(minuteShapeKw, slot) {
-  if (!Array.isArray(minuteShapeKw) || minuteShapeKw.length !== 1440) {
-    return Array(30).fill(1 / 30);
-  }
-
-  const start = slot * 30;
-  const vals = minuteShapeKw.slice(start, start + 30).map((v) => Math.max(0, Number(v || 0)));
-  const total = vals.reduce((a, b) => a + b, 0);
-  if (total <= 0) return Array(30).fill(1 / 30);
-  return vals.map((v) => v / total);
-}
-
-function DaySeriesChart({ series, minuteShapeKw }) {
+function DaySeriesChart({ series }) {
   const [lineVisible, setLineVisible] = useState({
     pv: true,
     house: true,
@@ -293,52 +286,66 @@ function DaySeriesChart({ series, minuteShapeKw }) {
     }
     return row;
   });
-  const minuteData = [];
-  if (Array.isArray(series.minutes) && series.minutes.length) {
-    for (const m of series.minutes) {
-      minuteData.push({
-        minute: Number(m.minute || 0),
-        pvKw: roundTo(m.pvKw, 3),
-        loadKw: roundTo(m.houseKw ?? m.loadKw, 3),
-        evKw: roundTo(m.evKw, 3),
-        gridKw: roundTo(m.gridKw, 3),
-        batteryKw: roundTo(m.batteryKw, 3),
-        importKw: roundTo(m.importKw, 3),
-        exportKwNegative: roundTo(m.exportKwNegative, 3),
-        socKwh: roundTo(m.socKwh, 3),
-      });
-    }
-  } else {
-    for (let slot = 0; slot < slotData.length; slot += 1) {
-      const s = slotData[slot];
-      const weights = getMinuteWeightsForSlot(minuteShapeKw, slot);
-      const pvKwhPerMinute = Number(s.pvKwh || 0) / 30;
-      const batteryNetKwhPerSlot = (
-        Number(s.batteryChargeFromPvKwh || 0)
-        + Number(s.batteryChargeFromGridKwh || 0)
-        - Number(s.batteryDischargeToLoadKwh || 0)
-        - Number(s.batteryDischargeToExportKwh || 0)
-      );
-      const batteryKwFlat = roundTo((batteryNetKwhPerSlot / 0.5), 3);
+  const slotChartData = slotData.map((s) => {
+    const batteryNetKwh = (
+      Number(s.batteryChargeFromPvKwh || 0)
+      + Number(s.batteryChargeFromGridKwh || 0)
+      - Number(s.batteryDischargeToLoadKwh || 0)
+      - Number(s.batteryDischargeToExportKwh || 0)
+    );
+    return {
+      ...s,
+      gridNetKwh: Number(s.gridImportKwh || 0) - Number(s.gridExportKwh || 0),
+      batteryNetKwh,
+    };
+  });
+  const slotPowerData = slotChartData.map((s) => ({
+    ...s,
+    pvKw: Number(s.pvKwh || 0) / 0.5,
+    houseKw: Number(s.houseLoadKwh || 0) / 0.5,
+    evKw: Number(s.evLoadKwh || 0) / 0.5,
+    gridNetKw: Number(s.gridNetKwh || 0) / 0.5,
+    batteryNetKw: Number(s.batteryNetKwh || 0) / 0.5,
+  }));
+  const hourlyData = [];
+  for (let i = 0; i < slotData.length; i += 2) {
+    const a = slotData[i];
+    const b = slotData[i + 1] || null;
+    const importKwh = Number(a?.gridImportKwh || 0) + Number(b?.gridImportKwh || 0);
+    const exportKwh = Number(a?.gridExportKwh || 0) + Number(b?.gridExportKwh || 0);
+    const importRate = importKwh > 0
+      ? (
+        ((Number(a?.importRate || 0) * Number(a?.gridImportKwh || 0))
+          + (Number(b?.importRate || 0) * Number(b?.gridImportKwh || 0)))
+        / importKwh
+      )
+      : ((Number(a?.importRate || 0) + Number(b?.importRate || 0)) / (b ? 2 : 1));
+    const exportRate = exportKwh > 0
+      ? (
+        ((Number(a?.exportRate || 0) * Number(a?.gridExportKwh || 0))
+          + (Number(b?.exportRate || 0) * Number(b?.gridExportKwh || 0)))
+        / exportKwh
+      )
+      : ((Number(a?.exportRate || 0) + Number(b?.exportRate || 0)) / (b ? 2 : 1));
+    const modes = [a?.forcedMode, b?.forcedMode].filter(Boolean);
+    const forcedMode = [...new Set(modes)].join("/");
 
-      for (let m = 0; m < 30; m += 1) {
-        const minuteIndex = slot * 30 + m;
-        const loadKwhMinute = Number(s.loadKwh || 0) * weights[m];
-        const gridImportKwhMinute = Number(s.gridImportKwh || 0) * weights[m];
-        const gridExportKwhMinute = Number(s.gridExportKwh || 0) / 30;
-        minuteData.push({
-          minute: minuteIndex,
-          pvKw: roundTo(pvKwhPerMinute * 60, 3),
-          loadKw: roundTo(loadKwhMinute * 60, 3),
-          evKw: 0,
-          gridKw: roundTo((gridImportKwhMinute - gridExportKwhMinute) * 60, 3),
-          batteryKw: batteryKwFlat,
-          importKw: roundTo(gridImportKwhMinute * 60, 3),
-          exportKwNegative: roundTo(-(gridExportKwhMinute * 60), 3),
-          socKwh: null,
-        });
-      }
-    }
+    hourlyData.push({
+      time: a?.time || "",
+      houseLoadKwh: Number(a?.houseLoadKwh || 0) + Number(b?.houseLoadKwh || 0),
+      evLoadKwh: Number(a?.evLoadKwh || 0) + Number(b?.evLoadKwh || 0),
+      loadKwh: Number(a?.loadKwh || 0) + Number(b?.loadKwh || 0),
+      pvKwh: Number(a?.pvKwh || 0) + Number(b?.pvKwh || 0),
+      forcedMode,
+      batteryDischargeKwh: Number(a?.batteryDischargeKwh || 0) + Number(b?.batteryDischargeKwh || 0),
+      socKwh: Number(b?.socKwh ?? a?.socKwh ?? 0),
+      gridImportKwh: importKwh,
+      importRate,
+      importCost: Number(a?.importCost || 0) + Number(b?.importCost || 0),
+      gridExportKwh: exportKwh,
+      exportRate,
+      exportRevenue: Number(a?.exportRevenue || 0) + Number(b?.exportRevenue || 0),
+    });
   }
 
   return (
@@ -404,7 +411,7 @@ function DaySeriesChart({ series, minuteShapeKw }) {
       </div>
 
       <div className="chart-wrap">
-        <h4>PV Generation vs House Consumption</h4>
+        <h4>PV Generation vs House Consumption (kW)</h4>
         <div className="line-toggles">
           <label className="check"><input type="checkbox" checked={lineVisible.pv} onChange={(e) => setLineVisible((v) => ({ ...v, pv: e.target.checked }))} /> PV</label>
           <label className="check"><input type="checkbox" checked={lineVisible.house} onChange={(e) => setLineVisible((v) => ({ ...v, house: e.target.checked }))} /> House</label>
@@ -413,26 +420,102 @@ function DaySeriesChart({ series, minuteShapeKw }) {
           <label className="check"><input type="checkbox" checked={lineVisible.battery} onChange={(e) => setLineVisible((v) => ({ ...v, battery: e.target.checked }))} /> Battery</label>
         </div>
         <ResponsiveContainer width="100%" height={260}>
-          <ComposedChart data={minuteData}>
+          <ComposedChart data={slotPowerData}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              dataKey="minute"
-              type="number"
-              domain={[0, 1439]}
-              ticks={[0, 120, 240, 360, 480, 600, 720, 840, 960, 1080, 1200, 1320, 1439]}
-              tickFormatter={(v) => minuteToClockLabel(v)}
+            <XAxis dataKey="time" interval={1} minTickGap={14} />
+            <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+            <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+            <Tooltip
+              labelFormatter={(v) => String(v)}
+              formatter={(value, name) => {
+                const kw = Number(value || 0);
+                return [`${fmtNum(kw, 3)} kW`, name];
+              }}
             />
-            <YAxis />
-            <Tooltip labelFormatter={(v) => minuteToClockLabel(Number(v))} />
             <Legend />
             {lineVisible.pv ? <Line type="monotone" dataKey="pvKw" name="PV Generation (kW)" stroke="#2563eb" dot={false} strokeWidth={2} /> : null}
-            {lineVisible.house ? <Line type="monotone" dataKey="loadKw" name="House Consumption (kW)" stroke="#f59e0b" dot={false} strokeWidth={2} /> : null}
+            {lineVisible.house ? <Line type="monotone" dataKey="houseKw" name="House Consumption (kW)" stroke="#f59e0b" dot={false} strokeWidth={2} /> : null}
             {lineVisible.ev ? <Line type="monotone" dataKey="evKw" name="EV Charging (kW)" stroke="#14b8a6" dot={false} strokeWidth={2} /> : null}
-            {lineVisible.grid ? <Line type="monotone" dataKey="gridKw" name="Grid Net (kW)" stroke="#ef4444" dot={false} strokeWidth={2} /> : null}
-            {lineVisible.battery ? <Line type="monotone" dataKey="batteryKw" name="Battery (kW)" stroke="#8b5cf6" dot={false} strokeWidth={2} /> : null}
+            {lineVisible.grid ? <Line type="monotone" dataKey="gridNetKw" name="Grid Net (kW)" stroke="#ef4444" dot={false} strokeWidth={2} /> : null}
+            {lineVisible.battery ? <Line type="monotone" dataKey="batteryNetKw" name="Battery Net (kW)" stroke="#8b5cf6" dot={false} strokeWidth={2} /> : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      {lineVisible.pv ? (
+        <div className="chart-wrap">
+          <h4>PV Generation (kW)</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={slotPowerData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" interval={1} minTickGap={14} />
+              <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+              <Tooltip formatter={(value) => [`${fmtNum(value, 3)} kW`, "PV Generation (kW)"]} />
+              <Line type="monotone" dataKey="pvKw" name="PV Generation (kW)" stroke="#2563eb" dot={false} strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      {lineVisible.house ? (
+        <div className="chart-wrap">
+          <h4>House Consumption (kW)</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={slotPowerData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" interval={1} minTickGap={14} />
+              <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+              <Tooltip formatter={(value) => [`${fmtNum(value, 3)} kW`, "House Consumption (kW)"]} />
+              <Line type="monotone" dataKey="houseKw" name="House Consumption (kW)" stroke="#f59e0b" dot={false} strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      {lineVisible.ev ? (
+        <div className="chart-wrap">
+          <h4>EV Charging (kW)</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={slotPowerData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" interval={1} minTickGap={14} />
+              <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+              <Tooltip formatter={(value) => [`${fmtNum(value, 3)} kW`, "EV Charging (kW)"]} />
+              <Line type="monotone" dataKey="evKw" name="EV Charging (kW)" stroke="#14b8a6" dot={false} strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      {lineVisible.grid ? (
+        <div className="chart-wrap">
+          <h4>Grid Net (kW)</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={slotPowerData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" interval={1} minTickGap={14} />
+              <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+              <Tooltip formatter={(value) => [`${fmtNum(value, 3)} kW`, "Grid Net (kW)"]} />
+              <Line type="monotone" dataKey="gridNetKw" name="Grid Net (kW)" stroke="#ef4444" dot={false} strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      {lineVisible.battery ? (
+        <div className="chart-wrap">
+          <h4>Battery Net (kW)</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={slotPowerData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" interval={1} minTickGap={14} />
+              <YAxis tickFormatter={(v) => `${fmtNum(v, 3)} kW`} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={2} strokeDasharray="4 4" />
+              <Tooltip formatter={(value) => [`${fmtNum(value, 3)} kW`, "Battery Net (kW)"]} />
+              <Line type="monotone" dataKey="batteryNetKw" name="Battery Net (kW)" stroke="#8b5cf6" dot={false} strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
 
       {pvArrayMeta.length ? (
         <div className="chart-wrap">
@@ -514,29 +597,22 @@ function DaySeriesChart({ series, minuteShapeKw }) {
           </p>
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={minuteData}>
+          <ComposedChart data={slotData}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              dataKey="minute"
-              type="number"
-              domain={[0, 1439]}
-              ticks={[0, 120, 240, 360, 480, 600, 720, 840, 960, 1080, 1200, 1320, 1439]}
-              tickFormatter={(v) => minuteToClockLabel(v)}
-            />
+            <XAxis dataKey="time" interval={1} minTickGap={14} />
             <YAxis />
             <Tooltip
-              labelFormatter={(v) => minuteToClockLabel(Number(v))}
-              formatter={(value, name) => [`${fmtNum(value, 3)}`, name]}
+              formatter={(value, name) => [`${fmtNum(value, 3)} kWh`, name]}
             />
             <Legend />
-            <Line type="linear" dataKey="importKw" name="Import (kW)" stroke="#ef4444" dot={false} strokeWidth={2} />
-            <Line type="linear" dataKey="exportKwNegative" name="Export (kW)" stroke="#22c55e" dot={false} strokeWidth={2} />
+            <Line type="linear" dataKey="gridImportKwh" name="Import (kWh)" stroke="#ef4444" dot={false} strokeWidth={2} />
+            <Line type="linear" dataKey="gridExportNegativeKwh" name="Export (kWh)" stroke="#22c55e" dot={false} strokeWidth={2} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
       <div className="chart-wrap">
-        <h4>Detailed Calculations (30-min)</h4>
+        <h4>Detailed Calculations (1h)</h4>
         <div className="monthly-wrap">
           <table className="monthly-table">
             <thead>
@@ -558,8 +634,8 @@ function DaySeriesChart({ series, minuteShapeKw }) {
               </tr>
             </thead>
             <tbody>
-              {slotData.map((s) => (
-                <tr key={`slot-${s.slot}`}>
+              {hourlyData.map((s) => (
+                <tr key={`hour-${s.time}`}>
                   <td>{s.time}</td>
                   <td>{fmtNum(s.houseLoadKwh, 3)}</td>
                   <td>{fmtNum(s.evLoadKwh, 3)}</td>
@@ -604,8 +680,8 @@ function MonthlyStatsTable({ monthly }) {
     gridExportKwh: acc.gridExportKwh + Number(m.gridExportKwh || 0),
     exportRevenue: acc.exportRevenue + Number(m.exportRevenue || 0),
     standingCharge: acc.standingCharge + Number(m.standingCharge || 0),
+    baselineCost: acc.baselineCost + Number(m.baselineCost || 0),
     totalCost: acc.totalCost + Number(m.totalCost || 0),
-    savingsVsBaseline: acc.savingsVsBaseline + Number(m.savingsVsBaseline || 0),
   }), {
     pvKwh: 0,
     loadKwh: 0,
@@ -616,8 +692,8 @@ function MonthlyStatsTable({ monthly }) {
     gridExportKwh: 0,
     exportRevenue: 0,
     standingCharge: 0,
+    baselineCost: 0,
     totalCost: 0,
-    savingsVsBaseline: 0,
   });
 
   return (
@@ -635,8 +711,8 @@ function MonthlyStatsTable({ monthly }) {
             <th>Export (kWh)</th>
             <th>Export Revenue</th>
             <th>Standing</th>
-            <th>Savings vs Baseline</th>
-            <th>Net Cashflow</th>
+            <th>Baseline Net Cashflow (incl standing)</th>
+            <th>Net Cashflow (incl standing)</th>
           </tr>
         </thead>
         <tbody>
@@ -652,7 +728,7 @@ function MonthlyStatsTable({ monthly }) {
               <td>{fmtNum(m.gridExportKwh)}</td>
               <td>{moneyCell(m.exportRevenue)}</td>
               <td>{moneyCell(-m.standingCharge)}</td>
-              <td>{moneyCell(m.savingsVsBaseline)}</td>
+              <td>{moneyCell(-(Number(m.baselineCost || 0) + Number(m.standingCharge || 0)))}</td>
               <td>{moneyCell(-m.totalCost)}</td>
             </tr>
           ))}
@@ -669,7 +745,7 @@ function MonthlyStatsTable({ monthly }) {
             <td><strong>{fmtNum(totals.gridExportKwh)}</strong></td>
             <td><strong>{moneyCell(totals.exportRevenue)}</strong></td>
             <td><strong>{moneyCell(-totals.standingCharge)}</strong></td>
-            <td><strong>{moneyCell(totals.savingsVsBaseline)}</strong></td>
+            <td><strong>{moneyCell(-(totals.baselineCost + totals.standingCharge))}</strong></td>
             <td><strong>{moneyCell(-totals.totalCost)}</strong></td>
           </tr>
         </tfoot>
@@ -1163,6 +1239,31 @@ function App() {
     }
   }
 
+  async function onImportOctopusYearSplitTariffs() {
+    try {
+      setBusy(true);
+      setError("");
+      const sourceYear = Number(project?.pvgis?.sourceYear ?? 2020);
+      const imported = await importOctopusYearTariffs({
+        namePrefix: octopusImport.name || `Octopus ${sourceYear}`,
+        importTariffCode: octopusImport.importTariffCode || undefined,
+        exportTariffCode: octopusImport.exportTariffCode || undefined,
+        includeVat: octopusImport.includeVat,
+        year: sourceYear,
+      });
+      const newTariffs = Array.isArray(imported?.tariffs) ? imported.tariffs : [];
+      if (!newTariffs.length) {
+        throw new Error("No tariffs were imported for the selected year.");
+      }
+      updateProject((p) => ({ ...p, tariffs: [...(p.tariffs || []), ...newTariffs] }));
+      setSelectedTariffs((prev) => [...new Set([...prev, ...newTariffs.map((t) => t.id)])]);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onLoadOctopusAvailableTariffs() {
     try {
       setBusy(true);
@@ -1211,7 +1312,7 @@ function App() {
       <div className="app-topbar">
         <div>
           <h1>Solar Typical-Year Budget Model</h1>
-          <p className="muted">30-minute simulation with PVGIS proxy generation, battery control, and multi-tariff comparison.</p>
+          <p className="muted">Minute-level simulation (with 30-minute tariff settlement) using PVGIS proxy generation, battery control, and multi-tariff comparison.</p>
         </div>
         <div className="tab-row">
           <button type="button" className={activeTab === "settings" ? "tab active" : "tab"} onClick={() => setActiveTab("settings")}>Settings</button>
@@ -1258,6 +1359,18 @@ function App() {
           <h2>Location</h2>
           <label>Latitude<input type="number" value={project.location.latitude} onChange={(e) => updateProject((p) => ({ ...p, location: { ...p.location, latitude: Number(e.target.value) } }))} /></label>
           <label>Longitude<input type="number" value={project.location.longitude} onChange={(e) => updateProject((p) => ({ ...p, location: { ...p.location, longitude: Number(e.target.value) } }))} /></label>
+          <label>PVGIS Source Year
+            <input
+              type="number"
+              min="2005"
+              value={project.pvgis?.sourceYear ?? 2020}
+              onChange={(e) => updateProject((p) => ({
+                ...p,
+                pvgis: { ...(p.pvgis || {}), sourceYear: Number(e.target.value) },
+              }))}
+            />
+          </label>
+          <p className="muted">PV generation profile is fetched from PVGIS for this specific source year.</p>
         </div>
         <div>
           <h2>Grid</h2>
@@ -1687,7 +1800,14 @@ function App() {
             </label>
             <button disabled={busy} onClick={onLoadOctopusAvailableTariffs}>Load Tariffs From .env</button>
             <button disabled={busy || !octopusImport.importTariffCode.trim()} onClick={onImportOctopusTariff}>Import Tariff</button>
+            <button
+              disabled={busy || (!octopusImport.importTariffCode.trim() && !octopusImport.exportTariffCode.trim())}
+              onClick={onImportOctopusYearSplitTariffs}
+            >
+              Import PVGIS Year (Split I/E)
+            </button>
           </div>
+          <p className="muted">Split import creates two tariffs for the selected PVGIS year: import-only and export-only. You can model them separately and mix different code pairs by importing again.</p>
           {octopusAvailable ? (
             <p className="muted">
               Loaded {octopusAvailable.importTariffs?.length || 0} import and {octopusAvailable.exportTariffs?.length || 0} export tariffs.
@@ -1788,7 +1908,7 @@ function App() {
                 <YearlyDailyTotalsCharts rows={r.dailyTotals} />
                 <YearlyDailyTotalsTable rows={r.dailyTotals} />
                 <h4>Selected day: {selectedDay}</h4>
-                <DaySeriesChart series={r.dailySeries} minuteShapeKw={project?.consumption?.minuteShapeKw} />
+                <DaySeriesChart series={r.dailySeries} />
               </div>
             ))}
           </div>

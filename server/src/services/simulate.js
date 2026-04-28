@@ -360,7 +360,9 @@ function roundNumbersDeep(value) {
 function getMinuteWeightsForSlot(consumption, slot) {
   const shape = consumption?.minuteShapeKw;
   if (!Array.isArray(shape) || shape.length !== 1440) {
-    return [1];
+    // Always run dispatch in 1-minute steps (30 steps per 30-min slot),
+    // even when no minute profile exists.
+    return Array(30).fill(1 / 30);
   }
 
   const start = slot * 30;
@@ -1034,10 +1036,10 @@ export async function simulateProject(project, tariffIds = null, selectedDay = n
     location: project.location,
     results: allTariffResults,
     assumptions: {
-      pvgisYearProxy: 2020,
+      pvgisSourceYear: Number(project?.pvgis?.sourceYear ?? 2020),
       simulationYear: simYear,
       slotsPerDay: 48,
-      note: "PV uses PVGIS seriescalc hourly production for 2020 as a typical-year proxy.",
+      note: `PV uses PVGIS seriescalc hourly production for selected source year ${Number(project?.pvgis?.sourceYear ?? 2020)}.`,
     },
   };
 
